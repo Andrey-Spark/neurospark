@@ -1,10 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
 
 app = FastAPI()
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,11 +11,11 @@ app.add_middleware(
         "http://localhost:3000",
         "https://spiffy-beignet-c2dfdc.netlify.app",
     ],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# база
+
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -29,10 +28,8 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
-
 class User(BaseModel):
     name: str
-
 
 @app.post("/login")
 def login(user: User):
@@ -45,13 +42,11 @@ def login(user: User):
 
     return {"status": "ok"}
 
-
 @app.post("/add_xp")
 def add_xp(user: User):
     cursor.execute("UPDATE users SET xp = xp + 10 WHERE name=?", (user.name,))
     conn.commit()
     return {"status": "xp added"}
-
 
 @app.get("/leaders")
 def leaders():
@@ -61,4 +56,3 @@ def leaders():
 @app.get("/")
 def root():
     return {"message": "Server is working 🚀"}
-
