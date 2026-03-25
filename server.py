@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id TEXT UNIQUE,
+    name TEXT,
+    xp INTEGER DEFAULT 0,
+    streak INTEGER DEFAULT 0,
+    last_done TEXT DEFAULT ''
+)
+""")
+conn.commit()
 
 def ensure_column_exists():
     cursor.execute("PRAGMA table_info(users)")
@@ -74,24 +85,74 @@ def login(user: User):
     return {"status": "ok"}
 
 
+from datetime import datetime, timedelta
+
 @app.post("/add_xp")
 def add_xp(user: XPUser):
+    today = datetime.now().strftime("%Y-%m-%d")
+
     cursor.execute(
-        "UPDATE users SET xp = xp + 10 WHERE telegram_id=?",
+        "SELECT xp, streak, last_done FROM users WHERE telegram_id=?",
         (user.telegram_id,),
     )
+    result = cursor.fetchone()
+
+    if not result:
+        return {"error": "user not found"}
+
+    xp, streak, last_done = result
+
+    # --- логика streak ---
+    if last_done:
+        last_date = datetime.strptime(last_done, "%Y-%m-%d")
+
+        if datetime.now() - last_date <= timedelta(days=1):
+            streak += 1
+        else:
+            streak = 1
+    else:
+        streak = 1
+
+    bonus = 0
+
+    # --- бонус за 5 дней ---
+    if streak >= 5:
+        bonus = 100
+        streak = 0  # сброс после награды
+
+    # --- базовый XP ---
+    gained_xp = 10 + streak * 2 + bonus
+    xp += gained_xp
+
+    # --- обновляем в БД ---
+    cursor.execute(
+        "UPDATE users SET xp=?, streak=?, last_done=? WHERE telegram_id=?",
+        (xp, streak, today, user.telegram_id),
+    )
     conn.commit()
-    return {"status": "xp added"}
+
+    return {
+        "status": "ok",
+        "xp_gained": gained_xp,
+        "streak": streak,
+        "bonus": bonus
+    }
 
 
 @app.get("/leaders")
 def leaders():
     cursor.execute(
-        "SELECT telegram_id, name, xp FROM users ORDER BY xp DESC"
+        "SELECT telegram_id, name, xp, streak FROM users ORDER BY xp DESC"
     )
     rows = cursor.fetchall()
+
     return [
-        {"telegram_id": row[0], "name": row[1], "xp": row[2]}
+        {
+            "telegram_id": row[0],
+            "name": row[1],
+            "xp": row[2],
+            "streak": row[3],
+        }
         for row in rows
     ]
 
