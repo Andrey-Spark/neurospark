@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta
+import sqlite3
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import sqlite3
 
 app = FastAPI()
 
@@ -24,16 +26,6 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     telegram_id TEXT UNIQUE,
     name TEXT,
-    xp INTEGER DEFAULT 0
-)
-""")
-conn.commit()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id TEXT UNIQUE,
-    name TEXT,
     xp INTEGER DEFAULT 0,
     streak INTEGER DEFAULT 0,
     last_done TEXT DEFAULT ''
@@ -41,7 +33,8 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
-def ensure_column_exists():
+
+def ensure_columns_exist():
     cursor.execute("PRAGMA table_info(users)")
     columns = [row[1] for row in cursor.fetchall()]
 
@@ -49,8 +42,16 @@ def ensure_column_exists():
         cursor.execute("ALTER TABLE users ADD COLUMN telegram_id TEXT")
         conn.commit()
 
+    if "streak" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN streak INTEGER DEFAULT 0")
+        conn.commit()
 
-ensure_column_exists()
+    if "last_done" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_done TEXT DEFAULT ''")
+        conn.commit()
+
+
+ensure_columns_exist()
 
 
 class User(BaseModel):
@@ -62,18 +63,23 @@ class XPUser(BaseModel):
     telegram_id: str
 
 
+@app.get("/")
+def root():
+    return {"message": "Server is working 🚀"}
+
+
 @app.post("/login")
 def login(user: User):
     cursor.execute(
-        "SELECT id, telegram_id, name, xp FROM users WHERE telegram_id=?",
+        "SELECT id, telegram_id, name, xp, streak, last_done FROM users WHERE telegram_id=?",
         (user.telegram_id,),
     )
     existing = cursor.fetchone()
 
     if not existing:
         cursor.execute(
-            "INSERT INTO users (telegram_id, name, xp) VALUES (?, ?, ?)",
-            (user.telegram_id, user.name, 0),
+            "INSERT INTO users (telegram_id, name, xp, streak, last_done) VALUES (?, ?, ?, ?, ?)",
+            (user.telegram_id, user.name, 0, 0, ""),
         )
     else:
         cursor.execute(
@@ -85,12 +91,8 @@ def login(user: User):
     return {"status": "ok"}
 
 
-from datetime import datetime, timedelta
-
 @app.post("/add_xp")
 def add_xp(user: XPUser):
-    today = datetime.now().strftime("%Y-%m-%d")
-
     cursor.execute(
         "SELECT xp, streak, last_done FROM users WHERE telegram_id=?",
         (user.telegram_id,),
@@ -101,33 +103,42 @@ def add_xp(user: XPUser):
         return {"error": "user not found"}
 
     xp, streak, last_done = result
+    today = datetime.now().date()
 
-    # --- логика streak ---
     if last_done:
-        last_date = datetime.strptime(last_done, "%Y-%m-%d")
+        last_date = datetime.strptime(last_done, "%Y-%m-%d").date()
 
-        if datetime.now() - last_date <= timedelta(days=1):
+        if last_date == today:
+            return {
+                "status": "already_done_today",
+                "xp_gained": 0,
+                "streak": streak,
+                "bonus": 0,
+                "xp_total": xp,
+            }
+
+        if today - last_date == timedelta(days=1):
             streak += 1
         else:
             streak = 1
     else:
         streak = 1
 
+    base_xp = 10
     bonus = 0
 
-    # --- бонус за 5 дней ---
     if streak >= 5:
         bonus = 100
-        streak = 0  # сброс после награды
+        gained_xp = base_xp + bonus
+        streak = 0
+    else:
+        gained_xp = base_xp
 
-    # --- базовый XP ---
-    gained_xp = 10 + streak * 2 + bonus
     xp += gained_xp
 
-    # --- обновляем в БД ---
     cursor.execute(
         "UPDATE users SET xp=?, streak=?, last_done=? WHERE telegram_id=?",
-        (xp, streak, today, user.telegram_id),
+        (xp, streak, today.strftime("%Y-%m-%d"), user.telegram_id),
     )
     conn.commit()
 
@@ -135,7 +146,8 @@ def add_xp(user: XPUser):
         "status": "ok",
         "xp_gained": gained_xp,
         "streak": streak,
-        "bonus": bonus
+        "bonus": bonus,
+        "xp_total": xp,
     }
 
 
